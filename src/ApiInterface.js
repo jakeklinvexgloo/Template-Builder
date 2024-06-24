@@ -20,6 +20,12 @@ const ApiInterface = () => {
   const [detailedSummary, setDetailedSummary] = useState('');
   const [generatingDetailedSummary, setGeneratingDetailedSummary] = useState(false);
   const [results, setResults] = useState([]);
+  const [simpleSummaryPrompt, setSimpleSummaryPrompt] = useState(
+    'Create a simple summary of less than 30 words that answers the question "{question}". Deliver the answer back in json with a format of summary:response.It is vitally important that you only generate this summary from the following text: "{text}"'
+  );
+  const [detailedSummaryPrompt, setDetailedSummaryPrompt] = useState(
+    'Create a simple summary of less than 60 words and then 3-5 bullet points that answers the question "{question}". Deliver the answer back in json with a format of summary:response, bullet:response. It is vitally important that you only generate this summary from the following text: "{text}"'
+  );
 
   const handlePublisherChange = (publisher) => {
     setSelectedPublishers(prev =>
@@ -92,7 +98,9 @@ const ApiInterface = () => {
 
   const generateSummary = async () => {
     setGeneratingSummary(true);
-    const prompt = `Create a simple summary of less than 30 words that answers the question "${question}". It is vitally important that you only generate this summary from the following text: "${concatenatedText}"`;
+    const prompt = simpleSummaryPrompt
+      .replace('{question}', question)
+      .replace('{text}', concatenatedText);
 
     try {
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -104,50 +112,7 @@ const ApiInterface = () => {
         body: JSON.stringify({
           model: "gpt-3.5-turbo",
           messages: [
-            {role: "system", content: "You are a helpful assistant that creates concise summaries."},
-            {role: "user", content: prompt}
-          ],
-          max_tokens: 60,
-          n: 1,
-          temperature: 0.7,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const data = await response.json();
-      console.log('API Response:', data); // For debugging
-
-      if (data.choices && data.choices.length > 0) {
-        setSummary(data.choices[0].message.content.trim());
-      } else {
-        setSummary('Failed to generate summary.');
-      }
-    } catch (error) {
-      console.error('Error generating summary:', error);
-      setSummary('Error generating summary. Please try again.');
-    } finally {
-      setGeneratingSummary(false);
-    }
-  };
-
-  const generateDetailedSummary = async () => {
-    setGeneratingDetailedSummary(true);
-    const prompt = `Create a simple summary of less than 30 words and then 3-5 bullet points that answers the question "${question}". It is vitally important that you only generate this summary from the following text: "${concatenatedText}"`;
-
-    try {
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${process.env.REACT_APP_OPENAI_API_KEY}`
-        },
-        body: JSON.stringify({
-          model: "gpt-3.5-turbo",
-          messages: [
-            {role: "system", content: "You are a helpful assistant that creates concise summaries with bullet points."},
+            {role: "system", content: "You are a helpful assistant that creates concise summaries. Please respond in JSON format with a 'summary' key."},
             {role: "user", content: prompt}
           ],
           max_tokens: 150,
@@ -161,10 +126,57 @@ const ApiInterface = () => {
       }
 
       const data = await response.json();
-      console.log('API Response (Detailed):', data); // For debugging
+      console.log('API Response:', data);
 
       if (data.choices && data.choices.length > 0) {
-        setDetailedSummary(data.choices[0].message.content.trim());
+        const jsonResponse = JSON.parse(data.choices[0].message.content);
+        setSummary(jsonResponse.summary);
+      } else {
+        setSummary('Failed to generate summary.');
+      }
+    } catch (error) {
+      console.error('Error generating summary:', error);
+      setSummary('Error generating summary. Please try again.');
+    } finally {
+      setGeneratingSummary(false);
+    }
+  };
+
+  const generateDetailedSummary = async () => {
+    setGeneratingDetailedSummary(true);
+    const prompt = detailedSummaryPrompt
+      .replace('{question}', question)
+      .replace('{text}', concatenatedText);
+
+    try {
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.REACT_APP_OPENAI_API_KEY}`
+        },
+        body: JSON.stringify({
+          model: "gpt-3.5-turbo",
+          messages: [
+            {role: "system", content: "You are a helpful assistant that creates concise summaries with bullet points. Please respond in JSON format with 'summary' and 'bullet1', 'bullet2', etc. keys."},
+            {role: "user", content: prompt}
+          ],
+          max_tokens: 250,
+          n: 1,
+          temperature: 0.7,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      console.log('API Response (Detailed):', data);
+
+      if (data.choices && data.choices.length > 0) {
+        const jsonResponse = JSON.parse(data.choices[0].message.content);
+        setDetailedSummary(jsonResponse);
       } else {
         setDetailedSummary('Failed to generate detailed summary.');
       }
@@ -464,8 +476,8 @@ const ApiInterface = () => {
               <h2 style={{ fontSize: '24px', marginBottom: '20px' }}>Simple Summary</h2>
               <textarea
                 style={styles.summaryInput}
-                value={`Create a simple summary of less than 30 words that answers the question "${question}". It is vitally important that you only generate this summary from the text: "${concatenatedText.slice(0, 100)}..."`}
-                readOnly
+                value={simpleSummaryPrompt}
+                onChange={(e) => setSimpleSummaryPrompt(e.target.value)}
               />
               <button
                 onClick={generateSummary}
@@ -487,8 +499,8 @@ const ApiInterface = () => {
               <h2 style={{ fontSize: '24px', marginBottom: '20px', marginTop: '40px' }}>Detailed Summary</h2>
               <textarea
                 style={styles.summaryInput}
-                value={`Create a simple summary of less than 30 words and then 3-5 bullet points that answers the question "${question}". It is vitally important that you only generate this summary from the text: "${concatenatedText.slice(0, 100)}..."`}
-                readOnly
+                value={detailedSummaryPrompt}
+                onChange={(e) => setDetailedSummaryPrompt(e.target.value)}
               />
               <button
                 onClick={generateDetailedSummary}
@@ -500,10 +512,17 @@ const ApiInterface = () => {
               >
                 {generatingDetailedSummary ? 'Generating...' : 'Generate Detailed Summary'}
               </button>
-              {detailedSummary && (
+              {detailedSummary && typeof detailedSummary === 'object' && (
                 <div style={{ marginTop: '20px' }}>
                   <h3>Generated Detailed Summary:</h3>
-                  <div style={{ whiteSpace: 'pre-wrap' }}>{detailedSummary}</div>
+                  <p><strong>Summary:</strong> {detailedSummary.summary}</p>
+                  <ul>
+                    {Object.entries(detailedSummary)
+                      .filter(([key]) => key.startsWith('bullet'))
+                      .map(([key, value]) => (
+                        <li key={key}>{value}</li>
+                      ))}
+                  </ul>
                 </div>
               )}
             </div>
