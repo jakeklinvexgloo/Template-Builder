@@ -14,6 +14,7 @@ const ApiInterface = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [copySuccess, setCopySuccess] = useState('');
+  const [activeTab, setActiveTab] = useState('paragraphs');
 
   const handlePublisherChange = (publisher) => {
     setSelectedPublishers(prev =>
@@ -67,7 +68,7 @@ const ApiInterface = () => {
     try {
       await navigator.clipboard.writeText(concatenatedText);
       setCopySuccess('Copied!');
-      setTimeout(() => setCopySuccess(''), 2000); // Clear the message after 2 seconds
+      setTimeout(() => setCopySuccess(''), 2000);
     } catch (err) {
       console.error('Failed to copy text: ', err);
       setCopySuccess('Failed to copy');
@@ -176,6 +177,30 @@ const ApiInterface = () => {
       marginLeft: '10px',
       fontSize: '14px',
     },
+    menuBar: {
+      display: 'flex',
+      justifyContent: 'flex-start',
+      marginBottom: '20px',
+    },
+    menuButton: {
+      padding: '10px 20px',
+      marginRight: '10px',
+      backgroundColor: '#f0f0f0',
+      border: 'none',
+      borderRadius: '4px',
+      cursor: 'pointer',
+      transition: 'background-color 0.3s ease',
+    },
+    activeMenuButton: {
+      backgroundColor: '#007aff',
+      color: 'white',
+    },
+    titleContainer: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: '20px',
+    },
   };
 
   return (
@@ -231,16 +256,50 @@ const ApiInterface = () => {
 
       {concatenatedText && (
         <div style={styles.results}>
-          <h2 style={{ fontSize: '24px', marginBottom: '20px' }}>Concatenated Paragraphs</h2>
-          <div style={styles.concatenatedText}>
-            {concatenatedText}
-          </div>
-          <div style={{ marginTop: '20px' }}>
-            <button onClick={copyToClipboard} style={styles.copyButton}>
-              Copy to Clipboard
+          <div style={styles.menuBar}>
+            <button
+              onClick={() => setActiveTab('paragraphs')}
+              style={{
+                ...styles.menuButton,
+                ...(activeTab === 'paragraphs' ? styles.activeMenuButton : {})
+              }}
+            >
+              Paragraphs
             </button>
-            <span style={styles.copySuccess}>{copySuccess}</span>
+            <button
+              onClick={() => setActiveTab('summaries')}
+              style={{
+                ...styles.menuButton,
+                ...(activeTab === 'summaries' ? styles.activeMenuButton : {})
+              }}
+            >
+              Summaries
+            </button>
           </div>
+
+          {activeTab === 'paragraphs' && (
+            <>
+              <div style={styles.titleContainer}>
+                <h2 style={{ fontSize: '24px' }}>Concatenated Paragraphs</h2>
+                <div>
+                  <button onClick={copyToClipboard} style={styles.copyButton}>
+                    Copy to Clipboard
+                  </button>
+                  <span style={styles.copySuccess}>{copySuccess}</span>
+                </div>
+              </div>
+              <div style={styles.concatenatedText}>
+                {concatenatedText}
+              </div>
+            </>
+          )}
+
+          {activeTab === 'summaries' && (
+            <div>
+              <h2 style={{ fontSize: '24px', marginBottom: '20px' }}>Summaries</h2>
+              <p>Summaries feature is not implemented yet.</p>
+            </div>
+          )}
         </div>
       )}
     </div>
