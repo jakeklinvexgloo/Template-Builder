@@ -17,6 +17,7 @@ const ApiInterface = () => {
   const [activeTab, setActiveTab] = useState('paragraphs');
   const [summary, setSummary] = useState('');
   const [generatingSummary, setGeneratingSummary] = useState(false);
+  const [results, setResults] = useState([]);
 
   const handlePublisherChange = (publisher) => {
     setSelectedPublishers(prev =>
@@ -43,6 +44,7 @@ const ApiInterface = () => {
     setError(null);
     setConcatenatedText('');
     setSummary('');
+    setResults([]);
 
     try {
       const response = await fetch(constructUrl());
@@ -52,10 +54,17 @@ const ApiInterface = () => {
       const data = await response.json();
       
       if (Array.isArray(data) && data.length > 0) {
-        const paragraphs = data.slice(0, concatenateCount)
-          .map(item => item.paragraph || '')
-          .filter(Boolean);
-        setConcatenatedText(paragraphs.join('\n\n'));
+        const filteredResults = data.slice(0, concatenateCount).map((item, index) => ({
+          id: index + 1,
+          paragraph: item.paragraph || '',
+          aititle: item.aititle || '',
+          holder: item.holder || '',
+          publisher: item.publisher || '',
+          productionimage: item.productionimage || '',
+        })).filter(item => item.paragraph);
+
+        setResults(filteredResults);
+        setConcatenatedText(filteredResults.map(item => item.paragraph).join('\n\n'));
       } else {
         setConcatenatedText('No results found.');
       }
@@ -187,15 +196,6 @@ const ApiInterface = () => {
     results: {
       marginTop: '40px',
     },
-    concatenatedText: {
-      backgroundColor: '#fff',
-      padding: '20px',
-      borderRadius: '12px',
-      boxShadow: '0 2px 4px rgba(0, 0, 0, 0.1)',
-      whiteSpace: 'pre-wrap',
-      fontSize: '16px',
-      lineHeight: '1.6',
-    },
     error: {
       color: '#ff3b30',
       backgroundColor: '#ffeeee',
@@ -266,6 +266,44 @@ const ApiInterface = () => {
       cursor: 'pointer',
       fontSize: '16px',
     },
+    resultCard: {
+      backgroundColor: '#fff',
+      borderRadius: '8px',
+      boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+      padding: '20px',
+      marginBottom: '20px',
+    },
+    resultHeader: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'flex-start',
+      marginBottom: '10px',
+    },
+    resultInfo: {
+      flex: 1,
+      marginRight: '20px',
+    },
+    resultTitle: {
+      fontSize: '20px',
+      fontWeight: 'bold',
+      marginBottom: '5px',
+    },
+    resultMeta: {
+      fontSize: '14px',
+      color: '#666',
+      marginBottom: '5px',
+    },
+    resultImage: {
+      width: '100px',
+      height: '100px',
+      objectFit: 'cover',
+      borderRadius: '4px',
+    },
+    resultParagraph: {
+      fontSize: '16px',
+      lineHeight: '1.6',
+      marginTop: '10px',
+    },
   };
 
   return (
@@ -319,7 +357,7 @@ const ApiInterface = () => {
         <div style={styles.error}>{error}</div>
       )}
 
-      {concatenatedText && (
+      {results.length > 0 && (
         <div style={styles.results}>
           <div style={styles.menuBar}>
             <button
@@ -353,9 +391,25 @@ const ApiInterface = () => {
                   <span style={styles.copySuccess}>{copySuccess}</span>
                 </div>
               </div>
-              <div style={styles.concatenatedText}>
-                {concatenatedText}
-              </div>
+              {results.map((result) => (
+                <div key={result.id} style={styles.resultCard}>
+                  <div style={styles.resultHeader}>
+                    <div style={styles.resultInfo}>
+                      <div style={styles.resultTitle}>{result.id}. {result.aititle}</div>
+                      <div style={styles.resultMeta}>
+                        <strong>Publisher:</strong> {result.publisher}
+                      </div>
+                      <div style={styles.resultMeta}>
+                        <strong>Holder:</strong> {result.holder}
+                      </div>
+                    </div>
+                    {result.productionimage && (
+                      <img src={result.productionimage} alt={result.aititle} style={styles.resultImage} />
+                    )}
+                  </div>
+                  <div style={styles.resultParagraph}>{result.paragraph}</div>
+                </div>
+              ))}
             </>
           )}
 
