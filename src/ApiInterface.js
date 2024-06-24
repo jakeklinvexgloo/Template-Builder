@@ -17,6 +17,8 @@ const ApiInterface = () => {
   const [activeTab, setActiveTab] = useState('paragraphs');
   const [summary, setSummary] = useState('');
   const [generatingSummary, setGeneratingSummary] = useState(false);
+  const [detailedSummary, setDetailedSummary] = useState('');
+  const [generatingDetailedSummary, setGeneratingDetailedSummary] = useState(false);
   const [results, setResults] = useState([]);
 
   const handlePublisherChange = (publisher) => {
@@ -44,6 +46,7 @@ const ApiInterface = () => {
     setError(null);
     setConcatenatedText('');
     setSummary('');
+    setDetailedSummary('');
     setResults([]);
 
     try {
@@ -127,6 +130,49 @@ const ApiInterface = () => {
       setSummary('Error generating summary. Please try again.');
     } finally {
       setGeneratingSummary(false);
+    }
+  };
+
+  const generateDetailedSummary = async () => {
+    setGeneratingDetailedSummary(true);
+    const prompt = `Create a simple summary of less than 30 words and then 3-5 bullet points that answers the question "${question}". It is vitally important that you only generate this summary from the following text: "${concatenatedText}"`;
+
+    try {
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.REACT_APP_OPENAI_API_KEY}`
+        },
+        body: JSON.stringify({
+          model: "gpt-3.5-turbo",
+          messages: [
+            {role: "system", content: "You are a helpful assistant that creates concise summaries with bullet points."},
+            {role: "user", content: prompt}
+          ],
+          max_tokens: 150,
+          n: 1,
+          temperature: 0.7,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      console.log('API Response (Detailed):', data); // For debugging
+
+      if (data.choices && data.choices.length > 0) {
+        setDetailedSummary(data.choices[0].message.content.trim());
+      } else {
+        setDetailedSummary('Failed to generate detailed summary.');
+      }
+    } catch (error) {
+      console.error('Error generating detailed summary:', error);
+      setDetailedSummary('Error generating detailed summary. Please try again.');
+    } finally {
+      setGeneratingDetailedSummary(false);
     }
   };
 
@@ -429,12 +475,35 @@ const ApiInterface = () => {
                   opacity: generatingSummary || !concatenatedText ? 0.5 : 1,
                 }}
               >
-                {generatingSummary ? 'Generating...' : 'Generate Summary'}
+                {generatingSummary ? 'Generating...' : 'Generate Simple Summary'}
               </button>
               {summary && (
                 <div style={{ marginTop: '20px' }}>
-                  <h3>Generated Summary:</h3>
+                  <h3>Generated Simple Summary:</h3>
                   <p>{summary}</p>
+                </div>
+              )}
+
+              <h2 style={{ fontSize: '24px', marginBottom: '20px', marginTop: '40px' }}>Detailed Summary</h2>
+              <textarea
+                style={styles.summaryInput}
+                value={`Create a simple summary of less than 30 words and then 3-5 bullet points that answers the question "${question}". It is vitally important that you only generate this summary from the text: "${concatenatedText.slice(0, 100)}..."`}
+                readOnly
+              />
+              <button
+                onClick={generateDetailedSummary}
+                disabled={generatingDetailedSummary || !concatenatedText}
+                style={{
+                  ...styles.generateButton,
+                  opacity: generatingDetailedSummary || !concatenatedText ? 0.5 : 1,
+                }}
+              >
+                {generatingDetailedSummary ? 'Generating...' : 'Generate Detailed Summary'}
+              </button>
+              {detailedSummary && (
+                <div style={{ marginTop: '20px' }}>
+                  <h3>Generated Detailed Summary:</h3>
+                  <div style={{ whiteSpace: 'pre-wrap' }}>{detailedSummary}</div>
                 </div>
               )}
             </div>
