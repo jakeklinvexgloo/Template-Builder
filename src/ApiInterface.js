@@ -9,7 +9,7 @@ const ApiInterface = () => {
 
   const [question, setQuestion] = useState('how do I raise kids');
   const [selectedPublishers, setSelectedPublishers] = useState([...publishers]);
-  const [concatenateCount, setConcatenateCount] = useState(3);
+  const [concatenateCount, setConcatenateCount] = useState(10); // Updated to 10
   const [concatenatedText, setConcatenatedText] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -22,6 +22,16 @@ const ApiInterface = () => {
   const [results, setResults] = useState([]);
   const [wikiSummary, setWikiSummary] = useState(null);
   const [generatingWikiSummary, setGeneratingWikiSummary] = useState(false);
+
+  const [sourcesPerSummary, setSourcesPerSummary] = useState(4);
+  const [snippetsPerHeadline, setSnippetsPerHeadline] = useState(5);
+
+  const [wikiOutlinePrompt, setWikiOutlinePrompt] = useState(
+    'Create outline for a list of 2 to 6 headlines where the headlines fit together to answer the question "{question}". All I want you to create is the headline of each section of the wiki that is less than 5 words and 2 or 3 rich and detailed questions under each section and a quick less than 30 word summary to answer the original question that should be asked from a conservative Christian perspective that is less than 30 words. Put in json format with answer: answer, headline 1: headline, questions 1: question 1 question 2 question 3. It is vitally important that you only create the steps and questions using the following text: "{text}"'
+  );
+  const [wikiSectionPrompt, setWikiSectionPrompt] = useState(
+    'Make a summary of less than 50 words to answer the question "{question}" from the text "{text}"'
+  );
 
   const [simpleSummaryPrompt, setSimpleSummaryPrompt] = useState(
     'Create a simple summary of less than 30 words that answers the question "{question}". Deliver the answer back in json with a format of summary:response. It is vitally important that you only generate this summary from the following text: "{text}"'
@@ -50,6 +60,57 @@ const ApiInterface = () => {
       });
     }
     return url;
+  };
+
+  const parseWikiResponse = (content) => {
+    let jsonResponse;
+
+    // Try to extract JSON from code block
+    const jsonBlockMatch = content.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+    if (jsonBlockMatch && jsonBlockMatch[1]) {
+      try {
+        jsonResponse = JSON.parse(jsonBlockMatch[1]);
+        console.log('Parsed JSON from code block:', jsonResponse);
+        return jsonResponse;
+      } catch (error) {
+        console.error('Error parsing JSON from code block:', error);
+      }
+    }
+
+    // Try to parse the entire content as JSON
+    try {
+      jsonResponse = JSON.parse(content);
+      console.log('Parsed entire content as JSON:', jsonResponse);
+      return jsonResponse;
+    } catch (error) {
+      console.error('Error parsing entire content as JSON:', error);
+    }
+
+    // If JSON parsing fails, try to extract key-value pairs
+    const lines = content.split('\n');
+    jsonResponse = {};
+    let currentKey = null;
+    for (const line of lines) {
+      const keyMatch = line.match(/^(\w+):\s*(.*)$/);
+      if (keyMatch) {
+        currentKey = keyMatch[1];
+        jsonResponse[currentKey] = keyMatch[2];
+      } else if (currentKey && line.trim()) {
+        if (Array.isArray(jsonResponse[currentKey])) {
+          jsonResponse[currentKey].push(line.trim());
+        } else {
+          jsonResponse[currentKey] = [jsonResponse[currentKey], line.trim()];
+        }
+      }
+    }
+
+    // If no structured data found, use the entire content as the answer
+    if (Object.keys(jsonResponse).length === 0) {
+      jsonResponse = { answer: content.trim() };
+    }
+
+    console.log('Extracted response:', jsonResponse);
+    return jsonResponse;
   };
 
   const handleSubmit = async (e) => {
@@ -197,10 +258,10 @@ const ApiInterface = () => {
 
   const generateWikiSummary = async () => {
     setGeneratingWikiSummary(true);
-    const prompt = wikiSummaryPrompt
+    const prompt = wikiOutlinePrompt
       .replace('{question}', question)
       .replace('{text}', concatenatedText);
-  
+
     try {
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
@@ -219,25 +280,24 @@ const ApiInterface = () => {
           temperature: 0.7,
         }),
       });
-  
+
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
-  
+
       const data = await response.json();
       console.log('Wiki Outline API Response:', data);
-  
+
       if (data.choices && data.choices.length > 0) {
-        try {
-          // Extract JSON from the content (remove code block markers if present)
-          const content = data.choices[0].message.content;
-          const jsonString = content.replace(/```json\n|\n```/g, '');
-          const jsonResponse = JSON.parse(jsonString);
-          await generateWikiSectionSummaries(jsonResponse);
-        } catch (parseError) {
-          console.error('Error parsing JSON response:', parseError);
-          setWikiSummary({ outline: { answer: 'Failed to parse wiki summary.' }, summaries: {} });
+        const content = data.choices[0].message.content;
+        const jsonResponse = parseWikiResponse(content);
+
+        // Ensure the jsonResponse has the expected structure
+        if (!jsonResponse.answer) {
+          jsonResponse.answer = "No answer provided.";
         }
+
+        await generateWikiSectionSummaries(jsonResponse);
       } else {
         setWikiSummary({ outline: { answer: 'Failed to generate wiki summary.' }, summaries: {} });
       }
@@ -249,54 +309,134 @@ const ApiInterface = () => {
     }
   };
 
-  const fetchParagraphsForQuestions = async (questions) => {
-    // This function should make a call to your paragraph API
-    // For now, we'll return the questions as a placeholder
-    // You should replace this with actual API call logic
-    console.log('Fetching paragraphs for questions:', questions);
-    return questions;
+ 
+
+  const fetchParagraphsForQuestions = async (questions, snippetCount) => {
+    try {
+      const url = `/all/${encodeURIComponent(questions)}?count=${snippetCount}`;
+      console.log('Fetching from URL:', url);
+      
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+  
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+  
+      const data = await response.json();
+      console.log(`Received ${data.length} paragraphs, using ${snippetCount}`);
+  
+      // Only return the requested number of paragraphs
+      return data.slice(0, snippetCount).map(item => ({
+        paragraph: item.paragraph || '',
+        publisher: item.publisher || '',
+        aititle: item.aititle || '',
+        biblicallesson: item.biblicallesson || '',
+        booktitle: item.booktitle || '',
+        holder: item.holder || ''
+      }));
+    } catch (error) {
+      console.error('Detailed error in fetchParagraphsForQuestions:', error);
+      return [];
+    }
   };
   
 
   const generateWikiSectionSummaries = async (wikiOutline) => {
     const sectionSummaries = {};
   
-    // Function to get headline and questions keys
-    const getKeys = (index) => {
-      const headlineKey = `headline${index}` in wikiOutline ? `headline${index}` :
-                          `headline ${index}` in wikiOutline ? `headline ${index}` : null;
-      const questionsKey = `questions${index}` in wikiOutline ? `questions${index}` :
-                           `questions ${index}` in wikiOutline ? `questions ${index}` : null;
-      return { headlineKey, questionsKey };
-    };
+    const headlineKeys = Object.keys(wikiOutline).filter(key => key.startsWith('headline') || key.match(/^headline_\d+$/));
+    console.log('Headline keys:', headlineKeys);
   
-    for (let i = 1; i <= 6; i++) {  // Assuming maximum 6 headlines
-      const { headlineKey, questionsKey } = getKeys(i);
-      if (headlineKey && questionsKey) {
-        const headline = wikiOutline[headlineKey];
-        const questions = wikiOutline[questionsKey];
+    for (const headlineKey of headlineKeys) {
+      const headline = wikiOutline[headlineKey];
+      const headlineNumber = headlineKey.replace(/\D/g, '');
+      const questionsKey = Object.keys(wikiOutline).find(key => 
+        key === `questions${headlineNumber}` || 
+        key === `questions_${headlineNumber}` ||
+        key.startsWith(`questions`) && key.endsWith(headlineNumber)
+      );
   
-        if (Array.isArray(questions)) {
-          // Concatenate questions
-          const concatenatedQuestions = questions.join(' ');
+      console.log(`Processing headline: ${headline}, questionsKey: ${questionsKey}`);
+  
+      if (questionsKey && wikiOutline[questionsKey]) {
+        const questions = Array.isArray(wikiOutline[questionsKey]) 
+          ? wikiOutline[questionsKey].join(' ')
+          : wikiOutline[questionsKey];
+  
+        try {
+          console.log(`Fetching paragraphs for headline: ${headline}, snippetsPerHeadline: ${snippetsPerHeadline}`);
+          const paragraphs = await fetchParagraphsForQuestions(questions, snippetsPerHeadline);
+          console.log(`Received ${paragraphs.length} paragraphs for headline: ${headline}`);
           
-          // Fetch paragraphs for questions
-          const paragraphs = await fetchParagraphsForQuestions(concatenatedQuestions);
-          
-          // Generate summary for paragraphs
-          const summary = await generateSummaryForParagraphs(paragraphs);
-          
-          sectionSummaries[headline] = summary;
+          const combinedText = paragraphs.map(p => p.paragraph).join(' ');
+  
+          // Generate a concise summary using OpenAI API
+          const summary = await generateConciseSummary(headline, combinedText);
+          console.log(`Generated summary for ${headline}:`, summary);
+  
+          sectionSummaries[headline] = { 
+            summary, 
+            sources: paragraphs.slice(0, Math.min(sourcesPerSummary, paragraphs.length))
+          };
+        } catch (error) {
+          console.error(`Error generating summary for "${headline}":`, error);
+          sectionSummaries[headline] = { summary: 'Failed to generate summary.', sources: [] };
         }
       }
     }
   
+    console.log('Final sectionSummaries:', sectionSummaries);
     setWikiSummary({ outline: wikiOutline, summaries: sectionSummaries });
   };
   
-  const generateSummaryForParagraphs = async (paragraphs) => {
-    const prompt = `Make a summary of less than 50 words to answer the question "${question}" from the text "${paragraphs}"`;
+  const generateConciseSummary = async (headline, text) => {
+    const prompt = `Summarize the following text about "${headline}" in less than 50 words:\n\n${text}`;
   
+    try {
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.REACT_APP_OPENAI_API_KEY}`
+        },
+        body: JSON.stringify({
+          model: "gpt-3.5-turbo",
+          messages: [
+            {role: "system", content: "You are a helpful assistant that creates concise summaries."},
+            {role: "user", content: prompt}
+          ],
+          max_tokens: 60,
+          n: 1,
+          temperature: 0.7,
+        }),
+      });
+  
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+  
+      const data = await response.json();
+      if (data.choices && data.choices.length > 0) {
+        return data.choices[0].message.content.trim();
+      } else {
+        return 'Failed to generate summary.';
+      }
+    } catch (error) {
+      console.error('Error generating concise summary:', error);
+      return 'Error generating summary.';
+    }
+  };
+  
+const generateSummaryForParagraphs = async (paragraphs) => {
+    const prompt = wikiSectionPrompt
+      .replace('{question}', question)
+      .replace('{text}', paragraphs);
+
     try {
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
@@ -315,14 +455,14 @@ const ApiInterface = () => {
           temperature: 0.7,
         }),
       });
-  
+
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
-  
+
       const data = await response.json();
       console.log('Section Summary API Response:', data);
-  
+
       if (data.choices && data.choices.length > 0) {
         return data.choices[0].message.content.trim();
       } else {
@@ -380,12 +520,12 @@ const ApiInterface = () => {
       marginRight: '8px',
     },
     concatenateInput: {
-      width: '60px',
-      padding: '8px',
-      marginLeft: '10px',
-      border: '1px solid #e1e1e1',
-      borderRadius: '4px',
-    },
+        width: '60px',
+        padding: '8px',
+        marginLeft: '10px',
+        border: '1px solid #e1e1e1',
+        borderRadius: '4px',
+      },
     button: {
       width: '100%',
       padding: '12px',
@@ -511,203 +651,262 @@ const ApiInterface = () => {
     };
   
     return (
-      <div style={styles.container}>
-        <form onSubmit={handleSubmit} style={styles.form}>
-          <input
-            type="text"
-            value={question}
-            onChange={(e) => setQuestion(e.target.value)}
-            placeholder="Enter your question"
-            style={styles.input}
-          />
-          <div style={styles.publisherContainer}>
-            {publishers.map(publisher => (
-              <label key={publisher} style={styles.publisherLabel}>
-                <input
-                  type="checkbox"
-                  checked={selectedPublishers.includes(publisher)}
-                  onChange={() => handlePublisherChange(publisher)}
-                  style={styles.publisherCheckbox}
-                />
-                {publisher}
-              </label>
-            ))}
-          </div>
-          <div style={{ marginBottom: '20px' }}>
-            <label>
-              Number of results to concatenate:
-              <input
-                type="number"
-                value={concatenateCount}
-                onChange={(e) => setConcatenateCount(Math.max(1, parseInt(e.target.value) || 1))}
-                style={styles.concatenateInput}
-              />
-            </label>
-          </div>
-          <button 
-            type="submit" 
-            disabled={loading}
-            style={{
-              ...styles.button,
-              backgroundColor: loading ? '#999' : '#007aff',
-              cursor: loading ? 'not-allowed' : 'pointer',
-            }}
-          >
-            {loading ? 'Loading...' : 'Submit'}
-          </button>
-        </form>
-  
-        {error && (
-          <div style={styles.error}>{error}</div>
-        )}
-  
-        {results.length > 0 && (
-          <div style={styles.results}>
-            <div style={styles.menuBar}>
-              <button
-                onClick={() => setActiveTab('paragraphs')}
-                style={{
-                  ...styles.menuButton,
-                  ...(activeTab === 'paragraphs' ? styles.activeMenuButton : {})
-                }}
-              >
-                Paragraphs
-              </button>
-              <button
-                onClick={() => setActiveTab('summaries')}
-                style={{
-                  ...styles.menuButton,
-                  ...(activeTab === 'summaries' ? styles.activeMenuButton : {})
-                }}
-              >
-                Summaries
-              </button>
+        <div style={styles.container}>
+          <form onSubmit={handleSubmit} style={styles.form}>
+            <input
+              type="text"
+              value={question}
+              onChange={(e) => setQuestion(e.target.value)}
+              placeholder="Enter your question"
+              style={styles.input}
+            />
+            <div style={styles.publisherContainer}>
+              {publishers.map(publisher => (
+                <label key={publisher} style={styles.publisherLabel}>
+                  <input
+                    type="checkbox"
+                    checked={selectedPublishers.includes(publisher)}
+                    onChange={() => handlePublisherChange(publisher)}
+                    style={styles.publisherCheckbox}
+                  />
+                  {publisher}
+                </label>
+              ))}
             </div>
-  
-            {activeTab === 'paragraphs' && (
-              <>
-                <div style={styles.titleContainer}>
-                  <h2 style={{ fontSize: '24px' }}>Concatenated Paragraphs</h2>
-                  <div>
-                    <button onClick={copyToClipboard} style={styles.copyButton}>
-                      Copy to Clipboard
-                    </button>
-                    <span style={styles.copySuccess}>{copySuccess}</span>
-                  </div>
-                </div>
-                {results.map((result) => (
-                  <div key={result.id} style={styles.resultCard}>
-                    <div style={styles.resultHeader}>
-                      <div style={styles.resultInfo}>
-                        <div style={styles.resultTitle}>{result.id}. {result.aititle}</div>
-                        <div style={styles.resultMeta}>
-                          <strong>Publisher:</strong> {result.publisher}
-                        </div>
-                        <div style={styles.resultMeta}>
-                          <strong>Holder:</strong> {result.holder}
-                        </div>
-                      </div>
-                      {result.productionimage && (
-                        <img src={result.productionimage} alt={result.aititle} style={styles.resultImage} />
-                      )}
+            <div style={{ marginBottom: '20px' }}>
+              <label>
+                Number of results to concatenate:
+                <input
+                  type="number"
+                  value={concatenateCount}
+                  onChange={(e) => setConcatenateCount(Math.max(1, parseInt(e.target.value) || 1))}
+                  style={styles.concatenateInput}
+                />
+              </label>
+            </div>
+            <div style={{ marginBottom: '20px' }}>
+            <label>
+    Number of snippets per headline:
+    <input
+      type="number"
+      value={snippetsPerHeadline}
+      onChange={(e) => {
+        const newValue = Math.max(1, parseInt(e.target.value) || 1);
+        console.log(`Updating snippetsPerHeadline to: ${newValue}`);
+        setSnippetsPerHeadline(newValue);
+      }}
+      style={styles.concatenateInput}
+    />
+  </label>
+        </div>
+        <button 
+          type="submit" 
+          disabled={loading}
+          style={{
+            ...styles.button,
+            backgroundColor: loading ? '#999' : '#007aff',
+            cursor: loading ? 'not-allowed' : 'pointer',
+          }}
+        >
+          {loading ? 'Loading...' : 'Submit'}
+        </button>
+      </form>
+      
+          {error && (
+            <div style={styles.error}>{error}</div>
+          )}
+      
+          {results.length > 0 && (
+            <div style={styles.results}>
+              <div style={styles.menuBar}>
+                <button
+                  onClick={() => setActiveTab('paragraphs')}
+                  style={{
+                    ...styles.menuButton,
+                    ...(activeTab === 'paragraphs' ? styles.activeMenuButton : {})
+                  }}
+                >
+                  Paragraphs
+                </button>
+                <button
+                  onClick={() => setActiveTab('summaries')}
+                  style={{
+                    ...styles.menuButton,
+                    ...(activeTab === 'summaries' ? styles.activeMenuButton : {})
+                  }}
+                >
+                  Summaries
+                </button>
+              </div>
+      
+              {activeTab === 'paragraphs' && (
+                <>
+                  <div style={styles.titleContainer}>
+                    <h2 style={{ fontSize: '24px' }}>Concatenated Paragraphs</h2>
+                    <div>
+                      <button onClick={copyToClipboard} style={styles.copyButton}>
+                        Copy to Clipboard
+                      </button>
+                      <span style={styles.copySuccess}>{copySuccess}</span>
                     </div>
-                    <div style={styles.resultParagraph}>{result.paragraph}</div>
                   </div>
-                ))}
-              </>
-            )}
-  
-            {activeTab === 'summaries' && (
-              <div>
-                <h2 style={{ fontSize: '24px', marginBottom: '20px' }}>Simple Summary</h2>
-                <textarea
-                  style={styles.summaryInput}
-                  value={simpleSummaryPrompt}
-                  onChange={(e) => setSimpleSummaryPrompt(e.target.value)}
-                />
-                <button
-                  onClick={generateSummary}
-                  disabled={generatingSummary || !concatenatedText}
-                  style={{
-                    ...styles.generateButton,
-                    opacity: generatingSummary || !concatenatedText ? 0.5 : 1,
-                  }}
-                >
-                  {generatingSummary ? 'Generating...' : 'Generate Simple Summary'}
-                </button>
-                {summary && (
-                  <div style={{ marginTop: '20px' }}>
-                    <h3>Generated Simple Summary:</h3>
-                    <p>{summary}</p>
+                  {results.map((result) => (
+                    <div key={result.id} style={styles.resultCard}>
+                      <div style={styles.resultHeader}>
+                        <div style={styles.resultInfo}>
+                          <div style={styles.resultTitle}>{result.id}. {result.aititle}</div>
+                          <div style={styles.resultMeta}>
+                            <strong>Publisher:</strong> {result.publisher}
+                          </div>
+                          <div style={styles.resultMeta}>
+                            <strong>Holder:</strong> {result.holder}
+                          </div>
+                        </div>
+                        {result.productionimage && (
+                          <img src={result.productionimage} alt={result.aititle} style={styles.resultImage} />
+                        )}
+                      </div>
+                      <div style={styles.resultParagraph}>{result.paragraph}</div>
+                    </div>
+                  ))}
+                </>
+              )}
+      
+              {activeTab === 'summaries' && (
+                <div>
+                  <h2 style={{ fontSize: '24px', marginBottom: '20px' }}>Simple Summary</h2>
+                  <textarea
+                    style={styles.summaryInput}
+                    value={simpleSummaryPrompt}
+                    onChange={(e) => setSimpleSummaryPrompt(e.target.value)}
+                  />
+                  <button
+                    onClick={generateSummary}
+                    disabled={generatingSummary || !concatenatedText}
+                    style={{
+                      ...styles.generateButton,
+                      opacity: generatingSummary || !concatenatedText ? 0.5 : 1,
+                    }}
+                  >
+                    {generatingSummary ? 'Generating...' : 'Generate Simple Summary'}
+                  </button>
+                  {summary && (
+                    <div style={{ marginTop: '20px' }}>
+                      <h3>Generated Simple Summary:</h3>
+                      <p>{summary}</p>
+                    </div>
+                  )}
+      
+                  <h2 style={{ fontSize: '24px', marginBottom: '20px', marginTop: '40px' }}>Detailed Summary</h2>
+                  <textarea
+                    style={styles.summaryInput}
+                    value={detailedSummaryPrompt}
+                    onChange={(e) => setDetailedSummaryPrompt(e.target.value)}
+                  />
+                  <button
+                    onClick={generateDetailedSummary}
+                    disabled={generatingDetailedSummary || !concatenatedText}
+                    style={{
+                      ...styles.generateButton,
+                      opacity: generatingDetailedSummary || !concatenatedText ? 0.5 : 1,
+                    }}
+                  >
+                    {generatingDetailedSummary ? 'Generating...' : 'Generate Detailed Summary'}
+                  </button>
+                  {detailedSummary && typeof detailedSummary === 'object' && (
+                    <div style={{ marginTop: '20px' }}>
+                      <h3>Generated Detailed Summary:</h3>
+                      <p><strong>Summary:</strong> {detailedSummary.summary}</p>
+                      <ul>
+                        {Object.entries(detailedSummary)
+                          .filter(([key]) => key.startsWith('bullet'))
+                          .map(([key, value]) => (
+                            <li key={key}>{value}</li>
+                          ))}
+                      </ul>
+                    </div>
+                  )}
+      
+                  <h2 style={{ fontSize: '24px', marginBottom: '20px', marginTop: '40px' }}>Wiki Summary</h2>
+                  <h3>Wiki Outline Prompt</h3>
+                  <textarea
+                    style={styles.summaryInput}
+                    value={wikiOutlinePrompt}
+                    onChange={(e) => setWikiOutlinePrompt(e.target.value)}
+                  />
+                  <h3>Wiki Section Summary Prompt</h3>
+                  <textarea
+                    style={styles.summaryInput}
+                    value={wikiSectionPrompt}
+                    onChange={(e) => setWikiSectionPrompt(e.target.value)}
+                  />
+                  <div style={{ marginBottom: '20px' }}>
+                    <label>
+                      Number of snippets per headline:
+                      <input
+                        type="number"
+                        value={snippetsPerHeadline}
+                        onChange={(e) => setSnippetsPerHeadline(Math.max(1, parseInt(e.target.value) || 1))}
+                        style={styles.concatenateInput}
+                      />
+                    </label>
                   </div>
-                )}
-  
-                <h2 style={{ fontSize: '24px', marginBottom: '20px', marginTop: '40px' }}>Detailed Summary</h2>
-                <textarea
-                  style={styles.summaryInput}
-                  value={detailedSummaryPrompt}
-                  onChange={(e) => setDetailedSummaryPrompt(e.target.value)}
-                />
-                <button
-                  onClick={generateDetailedSummary}
-                  disabled={generatingDetailedSummary || !concatenatedText}
-                  style={{
-                    ...styles.generateButton,
-                    opacity: generatingDetailedSummary || !concatenatedText ? 0.5 : 1,
-                  }}
-                >
-                  {generatingDetailedSummary ? 'Generating...' : 'Generate Detailed Summary'}
-                </button>
-                {detailedSummary && typeof detailedSummary === 'object' && (
-                  <div style={{ marginTop: '20px' }}>
-                    <h3>Generated Detailed Summary:</h3>
-                    <p><strong>Summary:</strong> {detailedSummary.summary}</p>
-                    <ul>
-                      {Object.entries(detailedSummary)
-                        .filter(([key]) => key.startsWith('bullet'))
-                        .map(([key, value]) => (
-                          <li key={key}>{value}</li>
-                        ))}
-                    </ul>
+                  <div style={{ marginBottom: '20px' }}>
+                    <label>
+                      Number of sources to display:
+                      <input
+                        type="number"
+                        value={sourcesPerSummary}
+                        onChange={(e) => setSourcesPerSummary(Math.max(1, parseInt(e.target.value) || 1))}
+                        style={styles.concatenateInput}
+                      />
+                    </label>
                   </div>
-                )}
-  
-                <h2 style={{ fontSize: '24px', marginBottom: '20px', marginTop: '40px' }}>Wiki Summary</h2>
-                <textarea
-                  style={styles.summaryInput}
-                  value={wikiSummaryPrompt}
-                  onChange={(e) => setWikiSummaryPrompt(e.target.value)}
-                />
-                <button
-                  onClick={generateWikiSummary}
-                  disabled={generatingWikiSummary || !concatenatedText}
-                  style={{
-                    ...styles.generateButton,
-                    opacity: generatingWikiSummary || !concatenatedText ? 0.5 : 1,
-                  }}
-                >
-                  {generatingWikiSummary ? 'Generating...' : 'Generate Wiki Summary'}
-                </button>
-                {wikiSummary && (
+                  <button
+                    onClick={generateWikiSummary}
+                    disabled={generatingWikiSummary || !concatenatedText}
+                    style={{
+                      ...styles.generateButton,
+                      opacity: generatingWikiSummary || !concatenatedText ? 0.5 : 1,
+                    }}
+                  >
+                    {generatingWikiSummary ? 'Generating...' : 'Generate Wiki Summary'}
+                  </button>
+                  {wikiSummary && (
   <div style={{ marginTop: '20px' }}>
     <h3>Generated Wiki Summary:</h3>
     {wikiSummary.outline && wikiSummary.outline.answer && (
       <p><strong>Answer:</strong> {wikiSummary.outline.answer}</p>
     )}
-    {wikiSummary.summaries && Object.entries(wikiSummary.summaries).map(([headline, summary], index) => (
+    {wikiSummary.summaries && Object.entries(wikiSummary.summaries).map(([headline, content], index) => (
       <div key={index} style={{ marginTop: '20px' }}>
         <h4>{headline}</h4>
-        <p>{summary}</p>
+        <p><strong>Summary:</strong> {content.summary}</p>
+        <h5>Sources:</h5>
+        <ul>
+          {content.sources.map((source, sourceIndex) => (
+            <li key={sourceIndex}>
+              <strong>Publisher:</strong> {source.publisher || 'N/A'}<br />
+              <strong>Title:</strong> {source.aititle || 'N/A'}<br />
+              <strong>Biblical Lesson:</strong> {source.biblicallesson || 'N/A'}<br />
+              <strong>{source.booktitle && source.booktitle !== 'nan' ? 'Book Title' : 'Holder'}:</strong> {
+                (source.booktitle && source.booktitle !== 'nan') ? source.booktitle : 
+                (source.holder && source.holder !== 'nan') ? source.holder : 
+                'N/A'
+              }
+            </li>
+          ))}
+        </ul>
       </div>
     ))}
   </div>
 )}
-              </div>
-            )}
           </div>
         )}
       </div>
-    );
-  };
-  
-  export default ApiInterface;
+    )}
+  </div>
+);
+};
+
+export default ApiInterface;
