@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 
 const ApiInterface = () => {
   const publishers = [
@@ -22,19 +22,20 @@ const ApiInterface = () => {
   const [results, setResults] = useState([]);
   const [wikiSummary, setWikiSummary] = useState(null);
   const [generatingWikiSummary, setGeneratingWikiSummary] = useState(false);
-
+  const [hoveredFootnote, setHoveredFootnote] = useState(null);
   const [sourcesPerSummary, setSourcesPerSummary] = useState(4);
   const [snippetsPerHeadline, setSnippetsPerHeadline] = useState(5);
 
   const [wikiOutlinePrompt, setWikiOutlinePrompt] = useState(
     'Create outline for a list of 2 to 6 headlines where the headlines fit together to answer the question "{question}". All I want you to create is the headline of each section of the wiki that is less than 5 words and 2 or 3 rich and detailed questions under each section and a quick less than 30 word summary to answer the original question that should be asked from a conservative Christian perspective that is less than 30 words. Put in json format with answer: answer, headline 1: headline, questions 1: question 1 question 2 question 3. It is vitally important that you only create the steps and questions using the following text: "{text}"'
   );
+
   const [wikiSectionPrompt, setWikiSectionPrompt] = useState(
-    'Make a summary of less than 50 words to answer the question "{question}" from the text "{text}"'
+    'Make a summary of less than 100 words to answer the question "{question}" from the text "{text}". Ensure the summary stands alone without introductory phrases. Include exactly 2 relevant quotes from the text that take up no more than 30% of the summary, evenly distributed throughout the summary. Prefix each quote with [QUOTE] and suffix with [/QUOTE].'
   );
 
   const [simpleSummaryPrompt, setSimpleSummaryPrompt] = useState(
-    'Create a simple summary of less than 30 words that answers the question "{question}". Deliver the answer back in json with a format of summary:response. It is vitally important that you only generate this summary from the following text: "{text}"'
+    'Create a simple summary of less than 30 words that answers the question "{question}". Deliver the answer back in json. It is vitally important that you only generate this summary from the following text: "{text}"'
   );
   const [detailedSummaryPrompt, setDetailedSummaryPrompt] = useState(
     'Create a simple summary of less than 60 words and then 3-5 bullet points that answers the question "{question}". Deliver the answer back in json with a format of summary:response, bullet:response. It is vitally important that you only generate this summary from the following text: "{text}"'
@@ -62,55 +63,43 @@ const ApiInterface = () => {
     return url;
   };
 
-  const parseWikiResponse = (content) => {
-    let jsonResponse;
-
-    // Try to extract JSON from code block
-    const jsonBlockMatch = content.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
-    if (jsonBlockMatch && jsonBlockMatch[1]) {
-      try {
-        jsonResponse = JSON.parse(jsonBlockMatch[1]);
-        console.log('Parsed JSON from code block:', jsonResponse);
-        return jsonResponse;
-      } catch (error) {
-        console.error('Error parsing JSON from code block:', error);
-      }
-    }
-
-    // Try to parse the entire content as JSON
+  const parseApiResponse = (content) => {
+    // First, try to parse the entire content as JSON
     try {
-      jsonResponse = JSON.parse(content);
-      console.log('Parsed entire content as JSON:', jsonResponse);
-      return jsonResponse;
-    } catch (error) {
-      console.error('Error parsing entire content as JSON:', error);
+      const parsedJson = JSON.parse(content);
+      // If successful, return the parsed JSON
+      return parsedJson;
+    } catch (e) {
+      // If JSON parsing fails, proceed with other parsing methods
+      console.log("Failed to parse entire content as JSON, trying other methods");
     }
-
-    // If JSON parsing fails, try to extract key-value pairs
-    const lines = content.split('\n');
-    jsonResponse = {};
-    let currentKey = null;
-    for (const line of lines) {
-      const keyMatch = line.match(/^(\w+):\s*(.*)$/);
-      if (keyMatch) {
-        currentKey = keyMatch[1];
-        jsonResponse[currentKey] = keyMatch[2];
-      } else if (currentKey && line.trim()) {
-        if (Array.isArray(jsonResponse[currentKey])) {
-          jsonResponse[currentKey].push(line.trim());
-        } else {
-          jsonResponse[currentKey] = [jsonResponse[currentKey], line.trim()];
-        }
+  
+    // Try to extract JSON from code blocks
+    const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+    if (jsonMatch && jsonMatch[1]) {
+      try {
+        return JSON.parse(jsonMatch[1]);
+      } catch (e) {
+        console.error("Failed to parse JSON from code block", e);
       }
     }
-
-    // If no structured data found, use the entire content as the answer
-    if (Object.keys(jsonResponse).length === 0) {
-      jsonResponse = { answer: content.trim() };
+  
+    // If still unsuccessful, try to extract key-value pairs
+    const lines = content.split('\n');
+    const result = {};
+    lines.forEach(line => {
+      const match = line.match(/^"?(\w+)"?\s*:\s*"?(.*?)"?,?$/);
+      if (match) {
+        result[match[1]] = match[2].replace(/^"|"$/g, '');
+      }
+    });
+  
+    if (Object.keys(result).length > 0) {
+      return result;
     }
-
-    console.log('Extracted response:', jsonResponse);
-    return jsonResponse;
+  
+    // If all else fails, return the original content
+    return { content: content };
   };
 
   const handleSubmit = async (e) => {
@@ -212,11 +201,11 @@ const ApiInterface = () => {
 
   const generateDetailedSummary = async () => {
     setGeneratingDetailedSummary(true);
-    const prompt = detailedSummaryPrompt
-      .replace('{question}', question)
-      .replace('{text}', concatenatedText);
-
     try {
+      const prompt = detailedSummaryPrompt
+        .replace('{question}', question)
+        .replace('{text}', concatenatedText);
+  
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -226,7 +215,7 @@ const ApiInterface = () => {
         body: JSON.stringify({
           model: "gpt-3.5-turbo",
           messages: [
-            {role: "system", content: "You are a helpful assistant that creates concise summaries with bullet points. Please respond in JSON format with 'summary' and 'bullet1', 'bullet2', etc. keys."},
+            {role: "system", content: "You are a helpful assistant that creates detailed summaries with bullet points."},
             {role: "user", content: prompt}
           ],
           max_tokens: 250,
@@ -234,82 +223,86 @@ const ApiInterface = () => {
           temperature: 0.7,
         }),
       });
-
+  
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
-
+  
       const data = await response.json();
-      console.log('API Response (Detailed):', data);
-
+      console.log('Detailed Summary API Response:', data);
+  
       if (data.choices && data.choices.length > 0) {
-        const jsonResponse = JSON.parse(data.choices[0].message.content);
-        setDetailedSummary(jsonResponse);
+        const content = data.choices[0].message.content;
+        const parsedResponse = parseApiResponse(content);
+        
+        // Format the detailed summary
+        const formattedSummary = {
+          summary: parsedResponse.summary || parsedResponse.response || '',
+          bullets: []
+        };
+  
+        // Extract bullet points
+        for (let i = 1; parsedResponse[`bullet${i}`]; i++) {
+          formattedSummary.bullets.push(parsedResponse[`bullet${i}`]);
+        }
+  
+        setDetailedSummary(formattedSummary);
       } else {
-        setDetailedSummary('Failed to generate detailed summary.');
+        setDetailedSummary({ summary: 'Failed to generate detailed summary.', bullets: [] });
       }
     } catch (error) {
       console.error('Error generating detailed summary:', error);
-      setDetailedSummary('Error generating detailed summary. Please try again.');
+      setDetailedSummary({ summary: 'Error generating detailed summary. Please try again.', bullets: [] });
     } finally {
       setGeneratingDetailedSummary(false);
     }
   };
 
-  const generateWikiSummary = async () => {
-    setGeneratingWikiSummary(true);
-    const prompt = wikiOutlinePrompt
-      .replace('{question}', question)
-      .replace('{text}', concatenatedText);
+  
+  
 
-    try {
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${process.env.REACT_APP_OPENAI_API_KEY}`
-        },
-        body: JSON.stringify({
-          model: "gpt-3.5-turbo",
-          messages: [
-            {role: "system", content: "You are a helpful assistant that creates structured wiki outlines."},
-            {role: "user", content: prompt}
-          ],
-          max_tokens: 500,
-          n: 1,
-          temperature: 0.7,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const data = await response.json();
-      console.log('Wiki Outline API Response:', data);
-
-      if (data.choices && data.choices.length > 0) {
-        const content = data.choices[0].message.content;
-        const jsonResponse = parseWikiResponse(content);
-
-        // Ensure the jsonResponse has the expected structure
-        if (!jsonResponse.answer) {
-          jsonResponse.answer = "No answer provided.";
-        }
-
-        await generateWikiSectionSummaries(jsonResponse);
-      } else {
-        setWikiSummary({ outline: { answer: 'Failed to generate wiki summary.' }, summaries: {} });
-      }
-    } catch (error) {
-      console.error('Error generating wiki summary:', error);
-      setWikiSummary({ outline: { answer: 'Error generating wiki summary. Please try again.' }, summaries: {} });
-    } finally {
-      setGeneratingWikiSummary(false);
-    }
+  
+  // Helper function to compare sentences and return a similarity score
+  const compareSentences = (sentence1, sentence2) => {
+    const words1 = sentence1.toLowerCase().split(/\W+/);
+    const words2 = sentence2.toLowerCase().split(/\W+/);
+    const commonWords = words1.filter(word => words2.includes(word));
+    return commonWords.length / Math.max(words1.length, words2.length);
   };
 
- 
+  const fetchAllParagraphs = async (question, count) => {
+  try {
+    const url = `/all/${encodeURIComponent(question)}?count=${count}`;
+    console.log('Fetching from URL:', url);
+    
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const data = await response.json();
+    console.log(`Received ${data.length} paragraphs`);
+
+    return data.map((item, index) => ({
+      id: index + 1,
+      text: item.paragraph || '',
+      publisher: item.publisher || 'N/A',
+      title: item.aititle || 'N/A',
+      biblicallesson: item.biblicallesson || 'N/A',
+      booktitle: item.booktitle || 'N/A',
+      holder: item.holder || 'N/A'
+    }));
+  } catch (error) {
+    console.error('Error fetching paragraphs:', error);
+    return [];
+  }
+};
 
   const fetchParagraphsForQuestions = async (questions, snippetCount) => {
     try {
@@ -344,7 +337,151 @@ const ApiInterface = () => {
       return [];
     }
   };
+
+  const [tooltipInfo, setTooltipInfo] = useState({
+    visible: false,
+    content: '',
+    x: 0,
+    y: 0
+  });
+
+  const showTooltip = (event, footnoteNumber) => {
+    const source = Object.values(wikiSummary?.summaries || {})
+      .flatMap(content => content.sources)
+      .find(source => source.footnoteNumber.toString() === footnoteNumber);
   
+    if (source) {
+      const content = `
+        <strong>Publisher:</strong> ${source.publisher}<br>
+        <strong>Title:</strong> ${source.title}<br>
+        ${source.biblicallesson ? `<strong>Biblical Lesson:</strong> ${source.biblicallesson}<br>` : ''}
+        ${source.booktitle && source.booktitle !== 'nan' ? `<strong>Book:</strong> ${source.booktitle}<br>` : ''}
+        ${source.holder && source.holder !== 'nan' ? `<strong>Holder:</strong> ${source.holder}` : ''}
+      `;
+      setTooltipInfo({
+        visible: true,
+        content,
+        x: event.pageX + 10,
+        y: event.pageY + 10
+      });
+    }
+  };
+  
+  const hideTooltip = () => {
+    setTooltipInfo(prev => ({ ...prev, visible: false }));
+  };
+  
+  const generateWikiSummary = async () => {
+    setGeneratingWikiSummary(true);
+    setWikiSummary({ outline: null, summaries: {}, loading: true });
+  
+    try {
+      const paragraphs = await fetchAllParagraphs(question, 20); // Adjust count as needed
+  
+      if (paragraphs.length === 0) {
+        throw new Error('No paragraphs found');
+      }
+  
+      const paragraphText = paragraphs.map(p => p.text).join('\n\n');
+  
+      const prompt = `Based on the following text, create a comprehensive wiki summary to answer the question: "${question}"
+  
+      1. Provide a brief (30 words max) overall answer.
+      2. Create 3-5 main topic headlines.
+      3. For each headline, write a concise summary (100 words max) that addresses the topic.
+      4. For each summary, include at least 3 relevant quotes from the text, evenly distributed throughout the summary. Prefix each quote with [QUOTE] and suffix with [/QUOTE].
+      5. Only use the provided text for information.
+      6. Format the output as JSON with the following structure:
+         {
+           "answer": "Brief overall answer",
+           "topics": [
+             {
+               "headline": "Topic 1",
+               "summary": "Concise summary with [QUOTE]relevant quote 1[/QUOTE] and [QUOTE]relevant quote 2[/QUOTE] and [QUOTE]relevant quote 3[/QUOTE]"
+             },
+             // ... more topics ...
+           ]
+         }
+  
+      Text:
+      ${paragraphText}`;
+  
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.REACT_APP_OPENAI_API_KEY}`
+        },
+        body: JSON.stringify({
+          model: "gpt-3.5-turbo",
+          messages: [
+            {role: "system", content: "You are a helpful assistant that creates structured wiki summaries with relevant quotes."},
+            {role: "user", content: prompt}
+          ],
+          max_tokens: 1000,
+          n: 1,
+          temperature: 0.7,
+        }),
+      });
+  
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+  
+      const data = await response.json();
+      console.log('Wiki Summary API Response:', data);
+  
+      if (data.choices && data.choices.length > 0) {
+        const content = data.choices[0].message.content;
+        const jsonResponse = parseApiResponse(content);
+  
+        console.log('Parsed Wiki Summary:', jsonResponse);
+  
+        let footnoteCounter = 1;
+        const processedSummaries = jsonResponse.topics.reduce((acc, topic) => {
+          let processedSummary = topic.summary;
+          const sources = [];
+  
+          // Process quotes and add footnotes
+          processedSummary = processedSummary.replace(/\[QUOTE\](.*?)\[\/QUOTE\]/g, (match, quote) => {
+            const trimmedQuote = quote.trim();
+            // Generate a pseudo-source when actual source isn't available
+            const pseudoSource = {
+              footnoteNumber: footnoteCounter,
+              publisher: 'Unknown',
+              title: 'Quote from Summary',
+              text: trimmedQuote
+            };
+            sources.push(pseudoSource);
+            return `<i>${trimmedQuote}</i><sup data-footnote="${footnoteCounter}" data-source='${JSON.stringify(pseudoSource)}'>[${footnoteCounter++}]</sup>`;
+          });
+  
+          acc[topic.headline] = {
+            summary: processedSummary,
+            sources: sources
+          };
+          return acc;
+        }, {});
+  
+        setWikiSummary({
+          outline: { answer: jsonResponse.answer },
+          summaries: processedSummaries,
+          loading: false
+        });
+      } else {
+        throw new Error('Failed to generate wiki summary.');
+      }
+    } catch (error) {
+      console.error('Error generating wiki summary:', error);
+      setWikiSummary({ 
+        outline: { answer: 'Error generating wiki summary. Please try again.' }, 
+        summaries: {}, 
+        loading: false 
+      });
+    } finally {
+      setGeneratingWikiSummary(false);
+    }
+  };
 
   const generateWikiSectionSummaries = async (wikiOutline) => {
     const sectionSummaries = {};
@@ -373,29 +510,119 @@ const ApiInterface = () => {
           const paragraphs = await fetchParagraphsForQuestions(questions, snippetsPerHeadline);
           console.log(`Received ${paragraphs.length} paragraphs for headline: ${headline}`);
           
-          const combinedText = paragraphs.map(p => p.paragraph).join(' ');
+          const combinedText = paragraphs.map(p => p.text).join(' ');
   
-          // Generate a concise summary using OpenAI API
           const summary = await generateConciseSummary(headline, combinedText);
           console.log(`Generated summary for ${headline}:`, summary);
   
-          sectionSummaries[headline] = { 
-            summary, 
-            sources: paragraphs.slice(0, Math.min(sourcesPerSummary, paragraphs.length))
+          let processedSummary = summary;
+          const sources = [];
+          let footnoteCounter = 1;
+  
+          // Process quotes and add footnotes
+          processedSummary = processedSummary.replace(/\[QUOTE\](.*?)\[\/QUOTE\]/g, (match, quote) => {
+            const trimmedQuote = quote.trim();
+            const sourceIndex = paragraphs.findIndex(p => p.text.includes(trimmedQuote));
+            if (sourceIndex !== -1) {
+              sources.push({
+                footnoteNumber: footnoteCounter,
+                ...paragraphs[sourceIndex]
+              });
+              return `<i>${trimmedQuote}</i><sup data-footnote="${footnoteCounter++}">[${sources.length}]</sup>`;
+            }
+            return `<i>${trimmedQuote}</i>`;
+          });
+  
+          sectionSummaries[headline] = {
+            summary: processedSummary,
+            sources: sources
           };
         } catch (error) {
           console.error(`Error generating summary for "${headline}":`, error);
           sectionSummaries[headline] = { summary: 'Failed to generate summary.', sources: [] };
         }
+      } else {
+        console.warn(`No questions found for headline: ${headline}`);
       }
     }
   
-    console.log('Final sectionSummaries:', sectionSummaries);
-    setWikiSummary({ outline: wikiOutline, summaries: sectionSummaries });
+    setWikiSummary(prevState => ({
+      ...prevState,
+      summaries: sectionSummaries,
+      loading: false
+    }));
   };
   
+  useEffect(() => {
+    const createTooltip = () => {
+      let tooltip = document.getElementById('footnote-tooltip');
+      if (!tooltip) {
+        tooltip = document.createElement('div');
+        tooltip.id = 'footnote-tooltip';
+        tooltip.style.display = 'none';
+        tooltip.style.position = 'fixed';
+        tooltip.style.backgroundColor = '#f9f9f9';
+        tooltip.style.border = '1px solid #ccc';
+        tooltip.style.borderRadius = '4px';
+        tooltip.style.padding = '8px';
+        tooltip.style.zIndex = '1000';
+        tooltip.style.maxWidth = '300px';
+        document.body.appendChild(tooltip);
+      }
+      return tooltip;
+    };
+  
+    const tooltip = createTooltip();
+  
+    const showTooltip = (event) => {
+        const target = event.target;
+        if (target.tagName === 'SUP' && target.dataset.footnote) {
+          const sourceData = target.dataset.source;
+          try {
+            const source = JSON.parse(decodeURIComponent(sourceData));
+            if (source) {
+              tooltip.innerHTML = `
+                <strong>Source:</strong> ${source.publisher !== 'Unknown' ? source.publisher : 'Not specified'}<br>
+                <strong>Title:</strong> ${source.title !== 'Quote from Summary' ? source.title : 'Not specified'}<br>
+                <strong>Quote:</strong> "${source.text}"<br>
+                ${source.biblicallesson ? `<strong>Biblical Lesson:</strong> ${source.biblicallesson}<br>` : ''}
+                ${source.booktitle && source.booktitle !== 'nan' ? `<strong>Book:</strong> ${source.booktitle}<br>` : ''}
+                ${source.holder && source.holder !== 'nan' ? `<strong>Holder:</strong> ${source.holder}` : ''}
+              `;
+              tooltip.style.display = 'block';
+              tooltip.style.left = `${event.pageX + 10}px`;
+              tooltip.style.top = `${event.pageY + 10}px`;
+            }
+          } catch (error) {
+            console.error('Error parsing source data:', error);
+          }
+        }
+      };
+  
+    const hideTooltip = () => {
+      tooltip.style.display = 'none';
+    };
+  
+    // Attach event listeners to the document
+    document.addEventListener('mouseover', showTooltip);
+    document.addEventListener('mouseout', hideTooltip);
+  
+    return () => {
+      // Clean up
+      document.removeEventListener('mouseover', showTooltip);
+      document.removeEventListener('mouseout', hideTooltip);
+      if (tooltip && document.body.contains(tooltip)) {
+        document.body.removeChild(tooltip);
+      }
+    };
+  }, []);
+
+
+
   const generateConciseSummary = async (headline, text) => {
-    const prompt = `Summarize the following text about "${headline}" in less than 50 words:\n\n${text}`;
+    const prompt = wikiSectionPrompt
+      .replace('{question}', headline)
+      .replace('{text}', text);
   
     try {
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -407,10 +634,10 @@ const ApiInterface = () => {
         body: JSON.stringify({
           model: "gpt-3.5-turbo",
           messages: [
-            {role: "system", content: "You are a helpful assistant that creates concise summaries."},
+            {role: "system", content: "You are a helpful assistant that creates concise summaries with evenly distributed quotes."},
             {role: "user", content: prompt}
           ],
-          max_tokens: 60,
+          max_tokens: 200,
           n: 1,
           temperature: 0.7,
         }),
@@ -431,7 +658,54 @@ const ApiInterface = () => {
       return 'Error generating summary.';
     }
   };
+ 
+  const generateSimpleSummary = async () => {
+    setGeneratingSummary(true);
+    try {
+      const prompt = simpleSummaryPrompt
+        .replace('{question}', question)
+        .replace('{text}', concatenatedText);
   
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.REACT_APP_OPENAI_API_KEY}`
+        },
+        body: JSON.stringify({
+          model: "gpt-3.5-turbo",
+          messages: [
+            {role: "system", content: "You are a helpful assistant that creates concise summaries."},
+            {role: "user", content: prompt}
+          ],
+          max_tokens: 150,
+          n: 1,
+          temperature: 0.7,
+        }),
+      });
+  
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+  
+      const data = await response.json();
+      console.log('Simple Summary API Response:', data);
+  
+      if (data.choices && data.choices.length > 0) {
+        const content = data.choices[0].message.content;
+        const parsedResponse = parseApiResponse(content);
+        setSummary(parsedResponse.summary || parsedResponse.response || parsedResponse.content || 'No summary generated.');
+      } else {
+        setSummary('Failed to generate summary.');
+      }
+    } catch (error) {
+      console.error('Error generating simple summary:', error);
+      setSummary('Error generating summary. Please try again.');
+    } finally {
+      setGeneratingSummary(false);
+    }
+  };
+
 const generateSummaryForParagraphs = async (paragraphs) => {
     const prompt = wikiSectionPrompt
       .replace('{question}', question)
@@ -585,6 +859,24 @@ const generateSummaryForParagraphs = async (paragraphs) => {
         backgroundColor: '#007aff',
         color: 'white',
       },
+      footnote: {
+        cursor: 'pointer',
+        color: '#0000EE',
+        position: 'relative',
+      },
+      tooltip: {
+        position: 'absolute',
+        bottom: '100%',
+        left: '50%',
+        transform: 'translateX(-50%)',
+        backgroundColor: '#f9f9f9',
+        border: '1px solid #ccc',
+        borderRadius: '4px',
+        padding: '8px',
+        zIndex: 1000,
+        whiteSpace: 'nowrap',
+        boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+      },
       titleContainer: {
         display: 'flex',
         justifyContent: 'space-between',
@@ -684,33 +976,18 @@ const generateSummaryForParagraphs = async (paragraphs) => {
                 />
               </label>
             </div>
-            <div style={{ marginBottom: '20px' }}>
-            <label>
-    Number of snippets per headline:
-    <input
-      type="number"
-      value={snippetsPerHeadline}
-      onChange={(e) => {
-        const newValue = Math.max(1, parseInt(e.target.value) || 1);
-        console.log(`Updating snippetsPerHeadline to: ${newValue}`);
-        setSnippetsPerHeadline(newValue);
-      }}
-      style={styles.concatenateInput}
-    />
-  </label>
-        </div>
-        <button 
-          type="submit" 
-          disabled={loading}
-          style={{
-            ...styles.button,
-            backgroundColor: loading ? '#999' : '#007aff',
-            cursor: loading ? 'not-allowed' : 'pointer',
-          }}
-        >
-          {loading ? 'Loading...' : 'Submit'}
-        </button>
-      </form>
+            <button 
+              type="submit" 
+              disabled={loading}
+              style={{
+                ...styles.button,
+                backgroundColor: loading ? '#999' : '#007aff',
+                cursor: loading ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {loading ? 'Loading...' : 'Submit'}
+            </button>
+          </form>
       
           {error && (
             <div style={styles.error}>{error}</div>
@@ -774,14 +1051,16 @@ const generateSummaryForParagraphs = async (paragraphs) => {
       
               {activeTab === 'summaries' && (
                 <div>
-                  <h2 style={{ fontSize: '24px', marginBottom: '20px' }}>Simple Summary</h2>
+                  <h2 style={{ fontSize: '24px', marginBottom: '20px', marginTop: '40px' }}>Summaries</h2>
+                  
+                  <h3>Simple Summary</h3>
                   <textarea
                     style={styles.summaryInput}
                     value={simpleSummaryPrompt}
                     onChange={(e) => setSimpleSummaryPrompt(e.target.value)}
                   />
                   <button
-                    onClick={generateSummary}
+                    onClick={generateSimpleSummary}
                     disabled={generatingSummary || !concatenatedText}
                     style={{
                       ...styles.generateButton,
@@ -792,12 +1071,12 @@ const generateSummaryForParagraphs = async (paragraphs) => {
                   </button>
                   {summary && (
                     <div style={{ marginTop: '20px' }}>
-                      <h3>Generated Simple Summary:</h3>
+                      <h4>Generated Simple Summary:</h4>
                       <p>{summary}</p>
                     </div>
                   )}
       
-                  <h2 style={{ fontSize: '24px', marginBottom: '20px', marginTop: '40px' }}>Detailed Summary</h2>
+                  <h3>Detailed Summary</h3>
                   <textarea
                     style={styles.summaryInput}
                     value={detailedSummaryPrompt}
@@ -813,28 +1092,31 @@ const generateSummaryForParagraphs = async (paragraphs) => {
                   >
                     {generatingDetailedSummary ? 'Generating...' : 'Generate Detailed Summary'}
                   </button>
-                  {detailedSummary && typeof detailedSummary === 'object' && (
+                  {detailedSummary && (
                     <div style={{ marginTop: '20px' }}>
-                      <h3>Generated Detailed Summary:</h3>
+                      <h4>Generated Detailed Summary:</h4>
                       <p><strong>Summary:</strong> {detailedSummary.summary}</p>
-                      <ul>
-                        {Object.entries(detailedSummary)
-                          .filter(([key]) => key.startsWith('bullet'))
-                          .map(([key, value]) => (
-                            <li key={key}>{value}</li>
-                          ))}
-                      </ul>
+                      {detailedSummary.bullets.length > 0 && (
+                        <>
+                          <h5>Key Points:</h5>
+                          <ul>
+                            {detailedSummary.bullets.map((bullet, index) => (
+                              <li key={index}>{bullet}</li>
+                            ))}
+                          </ul>
+                        </>
+                      )}
                     </div>
                   )}
       
-                  <h2 style={{ fontSize: '24px', marginBottom: '20px', marginTop: '40px' }}>Wiki Summary</h2>
-                  <h3>Wiki Outline Prompt</h3>
+                  <h3>Wiki Summary</h3>
+                  <h4>Wiki Outline Prompt</h4>
                   <textarea
                     style={styles.summaryInput}
                     value={wikiOutlinePrompt}
                     onChange={(e) => setWikiOutlinePrompt(e.target.value)}
                   />
-                  <h3>Wiki Section Summary Prompt</h3>
+                  <h4>Wiki Section Summary Prompt</h4>
                   <textarea
                     style={styles.summaryInput}
                     value={wikiSectionPrompt}
@@ -872,6 +1154,7 @@ const generateSummaryForParagraphs = async (paragraphs) => {
                   >
                     {generatingWikiSummary ? 'Generating...' : 'Generate Wiki Summary'}
                   </button>
+                  
                   {wikiSummary && (
   <div style={{ marginTop: '20px' }}>
     <h3>Generated Wiki Summary:</h3>
@@ -881,32 +1164,41 @@ const generateSummaryForParagraphs = async (paragraphs) => {
     {wikiSummary.summaries && Object.entries(wikiSummary.summaries).map(([headline, content], index) => (
       <div key={index} style={{ marginTop: '20px' }}>
         <h4>{headline}</h4>
-        <p><strong>Summary:</strong> {content.summary}</p>
-        <h5>Sources:</h5>
-        <ul>
-          {content.sources.map((source, sourceIndex) => (
-            <li key={sourceIndex}>
-              <strong>Publisher:</strong> {source.publisher || 'N/A'}<br />
-              <strong>Title:</strong> {source.aititle || 'N/A'}<br />
-              <strong>Biblical Lesson:</strong> {source.biblicallesson || 'N/A'}<br />
-              <strong>{source.booktitle && source.booktitle !== 'nan' ? 'Book Title' : 'Holder'}:</strong> {
-                (source.booktitle && source.booktitle !== 'nan') ? source.booktitle : 
-                (source.holder && source.holder !== 'nan') ? source.holder : 
-                'N/A'
-              }
-            </li>
-          ))}
-        </ul>
+        <p dangerouslySetInnerHTML={{ 
+          __html: content.summary.replace(/<sup data-footnote="(\d+)" data-source='(.*?)'>\[(\d+)\]<\/sup>/g, (match, footnoteNumber, sourceData, displayNumber) => {
+            const encodedSourceData = encodeURIComponent(sourceData);
+            return `<sup 
+              data-footnote="${footnoteNumber}" 
+              data-source="${encodedSourceData}"
+              style="cursor: pointer; color: #0000EE;"
+            >[${displayNumber}]</sup>`;
+          })
+        }} />
       </div>
     ))}
   </div>
 )}
-          </div>
-        )}
-      </div>
-    )}
-  </div>
-);
-};
-
-export default ApiInterface;
+      
+                  {/* Tooltip element */}
+                  <div 
+                    id="footnote-tooltip" 
+                    style={{
+                      display: 'none',
+                      position: 'fixed',
+                      backgroundColor: '#f9f9f9',
+                      border: '1px solid #ccc',
+                      borderRadius: '4px',
+                      padding: '8px',
+                      zIndex: 1000,
+                      maxWidth: '300px',
+                    }}
+                  ></div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      );
+      };
+      
+      export default ApiInterface;
